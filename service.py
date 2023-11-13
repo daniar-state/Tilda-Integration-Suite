@@ -119,9 +119,12 @@ class MooGoldAPI:
             response = post(url=f"{uri}{apiPath}", data=payload_json, headers=HEADERS)
             data = response.json()
             
+            print(f"\n\n\n\nЛОГ MOOGODL: {data} \n\n\n\n")
+            
             if response.status_code == 200:
-                if data['status'] == True:
-                    trxid = data['order_id']
+                #if data['message'] == 'Order has been created successfully':
+                if "status" in data and data["status"] == True:
+                    trxid = data['account_details']['order_id']
                     db.add_order(api_name='MOOGOLD', order_id=trxid, email_user=email, status='waiting', order_details=str(data))
                     return trxid
                 else:
@@ -155,7 +158,7 @@ class MooGoldAPI:
             data = response.json()
             
             if response.status_code == 200:
-                if data['order_status'] == 'completed':
+                if "order_status" in data and data["order_status"] == "completed":
                     return data
                 else:
                     handleNotificationStatus('MOOGOLD', data, f"CheckOrderStatus {trxid}" if trxid is not None else 'CheckOrderStatus', email, 'RESULT FALSE')

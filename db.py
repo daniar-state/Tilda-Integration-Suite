@@ -57,14 +57,14 @@ class DatabaseManager:
     def get_order_by_id(self, order_id):
         return session.query(Order).get(order_id)
     
-    def update_order(self, order_id, new_status, new_order_details):
-        order = session.query(Order).get(order_id)
-        order.status = new_status
+    def update_order(self, order_id, status, new_order_details):
+        order = session.query(Order).filter(Order.order_id == order_id).first()
+        order.status = status
         order.order_details = new_order_details
         session.commit()
         
     def delete_order(self, order_id):
-        order = session.query(Order).get(order_id)
+        order = session.query(Order).filter(Order.order_id == order_id).first()
         session.delete(order)
         session.commit()
         

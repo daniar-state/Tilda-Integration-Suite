@@ -1,6 +1,7 @@
 # file: /main.py
 
 import json
+import asyncio
 from time import sleep
 from threading import Thread
 from flask import Flask, request, jsonify, abort
@@ -28,37 +29,68 @@ def check_status(interval=60):
     while True:
         orders = db.get_orders_by_status('waiting')
         for order in orders:
-            api_name, order_id, email_user, _, _ = order
-            
-            if api_name == 'VIPayment':
+            if isinstance(order, (list, tuple)): 
+                api_name, order_id, email_user, _, _ = order
+            else:
+                api_name = order.api_name
+                order_id = order.order_id
+                email_user = order.email_user
+                
+            if api_name == 'VIPAYMENT':
                 orderData = VIPaymentAPI.check_order(uri=VIPAY_URI, api_key=VIPAY_API_KEY, sign=VIPAY_SIGN, trxid=order_id, email=email_user)
-                if not orderData or 'data' not in orderData:
+                if not orderData or not isinstance(orderData, dict) or 'data' not in orderData:
                     continue
-                status = orderData['data'].get('status')
+                if isinstance(orderData['data'], list) and len(orderData['data']) > 0:
+                    status = orderData['data'][0].get('status')
+                    service = orderData['data'][0].get('service')
+                    price = orderData['data'][0].get('price')
+                else:
+                    status = None
+                    
                 success_statuses = VIPayment_SUCCESS_STATUSES
-            elif api_name == 'MooGold':
+                statusContext = f"{api_name} - ORDER PAYMENT - Success\n\n{orderData}"
+                emailSendMessage(mail_recipient=email_user, msg=statusContext)
+                db.update_order(order_id=order_id, status=status, new_order_details=json.dumps(orderData))
+            elif api_name == 'MOOGOLD':
                 orderData = MooGoldAPI.check_order(uri=MGOLD_URI, secret_key=MGOLD_SECRET_KEY, partner_id=MGOLD_PARTNER_ID, trxid=order_id, email=email_user)
-                if not orderData or 'order_status' not in orderData:
+                if not orderData or not isinstance(orderData, dict) or 'data' not in orderData:
                     continue
-                status = orderData.get('order_status')
+                if isinstance(orderData['data'], list) and len(orderData['data']) > 0:
+                    status = orderData.get('order_status')
+                    price = orderData.get('total')
+                else:
+                    status = None
+                    
                 success_statuses = MooGold_SUCCESS_STATUSES
+                statusContext = f"{api_name} - ORDER PAYMENT - Success\n\n{orderData}"
+                
+                emailSendMessage(mail_recipient=email_user, msg=statusContext)
+                db.update_order(order_id=order_id, new_status=status, new_order_details=json.dumps(orderData))
             else:
                 continue
             
             if not status or status not in success_statuses:
                 continue
-            
-            statusContext = f"{api_name} - ORDER PAYMENT - Success\n\n{orderData}"
-            emailSendMessage(mail_recipient=email_user, msg=statusContext)
-            db.update_order(order_id=order_id, new_status=status, new_order_details=orderData)
         
         jm_orders = db.get_orders_jm_by_status('waiting')
         for order in jm_orders:
-            api_name, order_id, message_id, email_user, _, _ = order
+            if isinstance(order, (list, tuple)): 
+                _, api_name, order_id, message_id, email_user, _, _ = order
+            else:
+                api_name = order.api_name
+                order_id = order.order_id
+                message_id = order.message_id
+                email_user = order.email_user
+                
             orderData = JollyMaxAPI.check_order(uri=JMAX_URI, app_id=JMAX_MERCHANT_APP_ID, no_id=JMAX_MERCHANT_ID, outOrderId=order_id, messageId=message_id, email=email_user)
-            if not orderData or 'data' not in orderData:
-                continue
-            status = orderData['data'].get('status')
+            if not orderData or not isinstance(orderData, dict) or 'data' not in orderData:
+                    continue
+            if isinstance(orderData['data'], list) and len(orderData['data']) > 0:
+                status = orderData['data'][0].get('status')
+                price = orderData['data'][0].get('tradeAmount')
+            else:
+                status = None
+            
             success_statuses = JollyMax_SUCCESS_STATUSES
             
             if not status or status not in success_statuses:
@@ -66,7 +98,7 @@ def check_status(interval=60):
             
             statusContext = f"{api_name} - ORDER PAYMENT - Success\n\n{orderData}"
             emailSendMessage(mail_recipient=email_user, msg=statusContext)
-            db.update_jm_order(order_id=order_id, message_id=message_id, new_status=status, new_order_details=orderData)
+            db.update_jm_order(order_id=order_id, message_id=message_id, new_status=status, new_order_details=json.dumps(orderData))
         sleep(interval)
 
 
@@ -74,22 +106,35 @@ def check_status(interval=60):
 def index():
     return "Стартовый маршрут. SERVICE API V3"
 
-
 @app.route('/v3/skyshop', methods=['POST'])
 def skyshop_get_webhook():
-    data = request.json
+    
+    if request.is_json:
+        data = request.get_json()
+    else:
+        data = request.form.to_dict()
+        
+    if 'test' in data:
+        return jsonify({ "status": "success", "message": "Test request received", "data": data['test'] })
     
     user_id = data.get('Input')
     zone_id = data.get('Zone_ID')
     email = data.get('Email')
     select_box = data.get('Selectbox')
     
+    if not all([user_id, zone_id, email]):
+        return jsonify({ "error": "Missing parameters!" }), 400
+    
+    payment_data_str = data.get('payment')
+    if not payment_data_str:
+        return jsonify({ "error": "Missing payment data" }), 400
+    
     try:
-        payment_data = json.loads(data.get('payment'))
-        products = payment_data.get('products', [])
+        payment_data = json.loads(payment_data_str)
     except json.JSONDecodeError:
         return jsonify({ "error": "Invalid payment data" }), 400
     
+    products = payment_data.get('products', [])
     if not products:
         return jsonify({ "error": "No products found" }), 400
     
@@ -108,60 +153,8 @@ def skyshop_get_webhook():
     else:
         return jsonify({ "error": "Invalid service prefix" }), 400
     
-    return jsonify(response)
+    return jsonify({ "status": "success", "message": "Successful data", "data": response})
 
-"""
-@app.route('/v3/vipayment', methods=['POST'])
-def vipayment_order():
-    #! Получение данных из запроса
-    game = request.form.get('ml') #mobile-legends
-    user_id = request.form.get('uid')
-    zone_id = request.form.get('zode_id')
-    email = request.form.get('email')
-    
-    if not all([game, user_id, zone_id]):
-        abort(400, description="Отсутствуют параметры")
-    
-    orderPayment = VIPaymentAPI.place_an_order(uri=VIPAY_URI, api_key=VIPAY_API_KEY, sign=VIPAY_SIGN, service=game, user_id=user_id, zone_id=zone_id, email=email)
-    if orderPayment:
-        return jsonify({ 'message': orderPayment }), 200
-    else:
-        abort(500, description="Ошибка при создании заказа")
-
-
-@app.route('/v3/moogold', methods=['POST'])
-def moogold_order():
-    game = request.form.get('ml') #mobile-legends
-    user_id = request.form.get('uid')
-    zone_id = request.form.get('zode_id')
-    email = request.form.get('email')
-    
-    if not all([game, user_id, zone_id]):
-        abort(400, description="Отсутствуют параметры")
-    
-    orderPayment = MooGoldAPI.place_an_order(uri=MGOLD_URI, secret_key=MGOLD_SECRET_KEY, partner_id=MGOLD_PARTNER_ID, service=game, user_id=user_id, zone_id=zone_id, email=email)
-    if orderPayment:
-        return jsonify({ 'message': orderPayment }), 200
-    else:
-        abort(500, description="Ошибка при создании заказа")
-
-
-@app.route('/v3/jollymax', methods=['POST'])
-def jollymax_order():
-    game = request.form.get('ml') #mobile-legends
-    user_id = request.form.get('uid')
-    zone_id = request.form.get('zone_id')
-    email = request.form.get('email')
-    
-    if not all([game, user_id, zone_id]):
-        abort(400, description="Отсутствуют параметры")
-    
-    orderPayment = JollyMaxAPI.place_an_order(uri=JMAX_URI, app_id=JMAX_MERCHANT_APP_ID, no_id=JMAX_MERCHANT_ID, code=JM_CODE, user_id=user_id, zone_id=zone_id, email=email)
-    if orderPayment:
-        return jsonify({ 'message': orderPayment }), 200
-    else:
-        abort(500, description="Ошибка при создании заказа")
-"""
 
 
 if __name__ == '__main__':
