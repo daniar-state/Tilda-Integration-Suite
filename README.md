@@ -1,5 +1,5 @@
 # Tilda-Integration-Suite
-![image](https://i.ibb.co.com/vq4CKvX/carbon.png)
+[![image](https://i.ibb.co.com/vq4CKvX/carbon.png)](https://ibb.co.com/c3hK7XY)
 
  Tilda integration suite - is a powerful Python script designed to automate sales processes on the Tilda platform. This tool integrates Tilda with advanced payment and analytics services VIPayment, Moogold and JollyMax, ensuring smooth operation and increased sales efficiency.
 
